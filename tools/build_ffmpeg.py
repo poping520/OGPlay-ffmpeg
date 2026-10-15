@@ -92,6 +92,11 @@ def run(cmd, *, cwd: Path | None = None, env: dict | None = None,
         capture: bool = False) -> str:
     shown = cmd if isinstance(cmd, str) else " ".join(shlex.quote(str(c)) for c in cmd)
     print(f"+ {shown}", flush=True)
+    if not isinstance(cmd, str) and env is not None:
+        cmd = [str(c) for c in cmd]
+        search_path = next((value for key, value in reversed(list(env.items()))
+                            if key.upper() == "PATH"), os.defpath)
+        cmd[0] = shutil.which(cmd[0], path=search_path) or cmd[0]
     result = subprocess.run(
         cmd if isinstance(cmd, str) else [str(c) for c in cmd],
         cwd=cwd, env=env, text=True,
@@ -248,7 +253,11 @@ def configure_args(config: dict, name: str, prefix: str) -> list[str]:
 
 def toolchain_description(plat: dict, env: dict) -> str:
     if plat["os"] == "windows":
-        banner = subprocess.run(["cl"], env=env, text=True, capture_output=True)
+        search_path = next(value for key, value in reversed(list(env.items()))
+                           if key.upper() == "PATH")
+        banner = subprocess.run([shutil.which("cl", path=search_path) or "cl"],
+                                env=env, text=True, encoding="utf-8", errors="replace",
+                                capture_output=True)
         return (banner.stderr or banner.stdout).splitlines()[0].strip()
     return run([apple_tool("clang"), "--version"], capture=True).splitlines()[0].strip()
 
@@ -331,7 +340,8 @@ def library_versions(include: Path) -> dict[str, str]:
 def static_libraries(prefix: Path) -> list[Path]:
     libs = []
     for name in LIBRARIES:
-        candidates = [prefix / "lib" / f"lib{name}.a", prefix / "lib" / f"lib{name}.lib"]
+        candidates = [prefix / "lib" / f"lib{name}.a", prefix / "lib" / f"lib{name}.lib",
+                      prefix / "lib" / f"{name}.lib"]
         found = [c for c in candidates if c.is_file()]
         if not found:
             raise BuildError(f"static library for {name} not found in {prefix / 'lib'}")
@@ -486,6 +496,9 @@ def build(config: dict, name: str) -> Path:
     check_components(config, components)
 
     shutil.copytree(prefix / "include", stage / "include")
+    # Keep shared SDK headers byte-identical across Git newline settings.
+    for header in (stage / "include").rglob("*.h"):
+        header.write_bytes(header.read_bytes().replace(b"\r\n", b"\n"))
     sdk = stage / "sdk"
     sdk.mkdir()
     library, symbols = link_shared(config, plat, build_dir, prefix, sdk, env)

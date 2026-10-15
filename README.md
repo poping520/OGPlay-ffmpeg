@@ -38,10 +38,26 @@ Windows 上若当前环境没有 `cl`/`link`/`dumpbin`，脚本用 `vswhere` 找
 
 ```sh
 git submodule update --init --depth 1
+git -C ffmpeg fetch --depth 1 origin tag n8.1.3
 python3 tools/build_ffmpeg.py all --platform macos-arm64
 ```
 
-`all` 依次执行以下步骤，也可单独运行（Windows 用 `python` 并改为 `windows-x64`）：
+浅克隆可能只取得固定 commit，未取得对应 tag；构建前补取 `ffmpeg.json` 中的固定标签，
+确保生成的版本头与 prebuilt 公共头一致。升级源码时同步替换上述标签。
+
+Windows PowerShell（在本仓库根目录运行）：
+
+```powershell
+git submodule update --init --depth 1
+git -C ffmpeg fetch --depth 1 origin tag n8.1.3
+# MSYS2 不在默认 C:\msys64 时，设置实际安装路径。
+$env:OGPLAY_MSYS2_ROOT = 'D:\01_software\msys64'
+python tools/build_ffmpeg.py all --platform windows-x64
+```
+
+MSYS2 的依赖需先在其终端中安装：`pacman -S --needed make nasm diffutils`。
+
+`all` 依次执行以下步骤，也可单独运行：
 
 | 命令 | 作用 |
 | --- | --- |
