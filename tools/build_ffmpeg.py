@@ -52,6 +52,7 @@ WINDOWS_SYSTEM_DLLS = re.compile(
     re.IGNORECASE,
 )
 MACOS_SYSTEM_DYLIBS = ("/usr/lib/libSystem.B.dylib",)
+OS_METADATA_FILES = (".DS_Store", "Thumbs.db", "desktop.ini")
 
 
 class BuildError(Exception):
@@ -116,7 +117,8 @@ def file_entries(root: Path, exclude: tuple[str, ...] = ("manifest.json",)) -> l
     entries = []
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         relative = path.relative_to(root).as_posix()
-        if relative in exclude:
+        # File browsers drop metadata files into opened folders; never package them.
+        if relative in exclude or path.name in OS_METADATA_FILES:
             continue
         entries.append({"path": relative, "size": path.stat().st_size, "sha256": sha256(path)})
     return entries
