@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "ffmpeg": {
+    "tag": "n8.1.3",
+    "commit": "1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7"
+  },
+  "library_name": "ogplay_ffmpeg",
+  "components": {
+    "demuxer": ["mov"],
+    "decoder": ["h264", "mpeg4", "aac"],
+    "parser": ["h264", "mpeg4video", "aac"]
+  },
+  "implied_components": {
+    "decoder": ["h263"]
+  },
+  "configure_common": [
+    "--disable-everything",
+    "--disable-autodetect",
+    "--disable-programs",
+    "--disable-doc",
+    "--disable-network",
+    "--disable-avdevice",
+    "--disable-avfilter",
+    "--disable-debug",
+    "--enable-static",
+    "--disable-shared",
+    "--enable-pic",
+    "--enable-avcodec",
+    "--enable-avformat",
+    "--enable-swscale",
+    "--enable-swresample"
+  ],
+  "platforms": {
+    "macos-arm64": {
+      "os": "macos",
+      "cpu": "arm64",
+      "deployment_target": "11.0",
+      "configure": [
+        "--arch=aarch64",
+        "--target-os=darwin",
+        "--enable-pthreads"
+      ]
+    },
+    "macos-x64": {
+      "os": "macos",
+      "cpu": "x64",
+      "deployment_target": "11.0",
+      "requires_nasm": true,
+      "configure": [
+        "--arch=x86_64",
+        "--target-os=darwin",
+        "--enable-cross-compile",
+        "--enable-pthreads",
+        "--enable-x86asm"
+      ]
+    },
+    "windows-x64": {
+      "os": "windows",
+      "cpu": "x64",
+      "requires_nasm": true,
+      "configure": [
+        "--toolchain=msvc",
+        "--arch=x86_64",
+        "--target-os=win64",
+        "--enable-w32threads",
+        "--enable-x86asm",
+        "--extra-cflags=-MD"
+      ]
+    }
+  },
+  "export_prefixes": [
+    "av_",
+    "avcodec_",
+    "avformat_",
+    "avio_",
+    "avutil_",
+    "avsubtitle_",
+    "sws_",
+    "swscale_",
+    "swr_",
+    "swresample_"
+  ],
+  "consumer_api": [
+    "avutil_version", "avcodec_version", "avformat_version",
+    "swscale_version", "swresample_version",
+    "av_frame_alloc", "av_frame_free", "av_frame_unref",
+    "av_frame_get_plane_buffer", "av_pix_fmt_count_planes",
+    "av_opt_set", "av_opt_set_int", "av_get_sample_fmt_name",
+    "av_malloc", "av_free", "av_strerror",
+    "avformat_alloc_context", "avformat_open_input", "avformat_close_input",
+    "avformat_find_stream_info", "av_find_best_stream", "av_find_input_format",
+    "av_read_frame", "av_seek_frame",
+    "avio_alloc_context", "avio_context_free",
+    "av_packet_alloc", "av_packet_free", "av_packet_unref",
+    "avcodec_find_decoder", "avcodec_get_name",
+    "avcodec_alloc_context3", "avcodec_free_context",
+    "avcodec_parameters_to_context", "avcodec_open2",
+    "avcodec_send_packet", "avcodec_receive_frame", "avcodec_flush_buffers",
+    "sws_getContext", "sws_scale", "sws_freeContext",
+    "swr_alloc", "swr_init", "swr_convert", "swr_free"
+  ]
+}

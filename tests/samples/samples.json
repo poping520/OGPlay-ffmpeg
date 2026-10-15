@@ -1,0 +1,35 @@
+{
+  "samples": [
+    {
+      "file": "h264-high-aac.mp4",
+      "expect": {
+        "status": "ok", "video_codec": "h264", "width": 160, "height": 90,
+        "video_frames": 24, "rgba_frames": 24, "seek": true,
+        "audio_codec": "aac", "sample_rate": 44100, "channels": 2,
+        "min_audio_samples": 80000
+      }
+    },
+    {
+      "file": "mpeg4-aac-moov-at-end.mp4",
+      "expect": {
+        "status": "ok", "video_codec": "mpeg4", "width": 160, "height": 90,
+        "video_frames": 24, "rgba_frames": 24, "seek": true,
+        "audio_codec": "aac", "sample_rate": 22050, "channels": 1,
+        "min_audio_samples": 40000
+      }
+    },
+    {
+      "file": "h263-aac.3gp",
+      "expect": {
+        "status": "ok", "video_codec": "h263", "width": 176, "height": 144,
+        "video_frames": 24, "rgba_frames": 24, "seek": true,
+        "audio_codec": "aac", "sample_rate": 22050, "channels": 1,
+        "min_audio_samples": 40000
+      }
+    },
+    {
+      "file": "hevc-aac.mp4",
+      "expect": { "status": "unsupported", "stream": "video", "codec": "hevc" }
+    }
+  ]
+}
