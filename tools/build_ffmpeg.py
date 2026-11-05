@@ -207,6 +207,9 @@ def msys_environment(base: dict) -> dict:
     env["MSYS2_PATH_TYPE"] = "inherit"
     env["CHERE_INVOKING"] = "1"
     env["MSYSTEM"] = "MSYS"
+    # configure compiles through a src symlink only if `ln -s` makes a real one; MSYS copies by
+    # default, and the absolute source paths it then falls back to end up in the DLL.
+    env["MSYS"] = "winsymlinks:nativestrict"
     return env
 
 
@@ -235,6 +238,11 @@ def macos_flags(plat: dict) -> str:
 
 # --------------------------------------------------------------------------
 # Configure / build
+
+
+# configure records its arguments inside the library, so --prefix must not name this machine.
+# Nothing is installed there: `make install` goes to DESTDIR under build/<platform>/install.
+CONFIGURE_PREFIX = "/ogplay-ffmpeg"
 
 
 def configure_args(config: dict, name: str, prefix: str) -> list[str]:
@@ -274,20 +282,21 @@ def check_nasm(plat: dict, env: dict, build_dir: Path) -> None:
                          "without x86asm would silently make H.264 decoding slow)")
 
 
-def configure_and_make(config: dict, name: str, build_dir: Path, prefix: Path,
+def configure_and_make(config: dict, name: str, build_dir: Path, destdir: Path,
                        env: dict) -> list[str]:
     plat = platform_config(config, name)
     jobs = str(os.cpu_count() or 4)
     if plat["os"] == "windows":
-        args = configure_args(config, name, msys_path(prefix))
+        args = configure_args(config, name, CONFIGURE_PREFIX)
         configure = " ".join(shlex.quote(a) for a in [f"{msys_path(SOURCE)}/configure", *args])
         run_bash(configure, cwd=build_dir, env=env)
-        run_bash(f"make -j{jobs} && make install", cwd=build_dir, env=env)
+        install = f"make install DESTDIR={shlex.quote(msys_path(destdir))}"
+        run_bash(f"make -j{jobs} && {install}", cwd=build_dir, env=env)
     else:
-        args = configure_args(config, name, str(prefix))
+        args = configure_args(config, name, CONFIGURE_PREFIX)
         run([SOURCE / "configure", *args], cwd=build_dir, env=env)
         run(["make", f"-j{jobs}"], cwd=build_dir, env=env)
-        run(["make", "install"], cwd=build_dir, env=env)
+        run(["make", "install", f"DESTDIR={destdir}"], cwd=build_dir, env=env)
     return args
 
 
@@ -409,6 +418,7 @@ def link_shared(config: dict, plat: dict, build_dir: Path, prefix: Path, sdk: Pa
         run(["link", "/NOLOGO", "/DLL", "/MACHINE:X64", f"/OUT:{library}",
              f"/IMPLIB:{sdk / 'lib' / f'{name}.lib'}", f"/DEF:{definition}",
              "/OPT:REF", "/OPT:ICF", "/DEBUG", f"/PDB:{build_dir / f'{name}.pdb'}",
+             "/PDBALTPATH:%_PDB%",  # the DLL records only the PDB's file name
              *libs, *extras], cwd=build_dir, env=env)
         # The import library's .exp side file is not part of the SDK.
         for leftover in (sdk / "lib").glob("*.exp"):
@@ -472,6 +482,19 @@ def check_exports(config: dict, exports: set[str], expected: dict[str, bool]) ->
             f"extra {sorted(exports - set(expected))[:10]}")
 
 
+def check_no_machine_paths(library: Path) -> None:
+    """The published binary must not reveal where or by whom it was built."""
+    data = library.read_bytes()
+    paths = {str(BUILD_ROOT), BUILD_ROOT.as_posix(), msys_path(BUILD_ROOT),
+             str(SOURCE), SOURCE.as_posix(), msys_path(SOURCE),
+             str(Path.home()), Path.home().as_posix()}
+    found = sorted(path for path in paths if path.encode() in data)
+    if found:
+        hint = ("; on Windows, enable Developer Mode so configure can create its src symlink"
+                if library.suffix == ".dll" else "")
+        raise BuildError(f"{library.name} contains build machine paths: {found}{hint}")
+
+
 def copy_licenses(sdk: Path) -> None:
     licenses = sdk / "licenses"
     licenses.mkdir()
@@ -484,13 +507,14 @@ def build(config: dict, name: str) -> Path:
     require_host(plat, name)
     check_source(config)
     base = BUILD_ROOT / name
-    build_dir, prefix, stage = base / "obj", base / "install", base / "stage"
-    for path in (build_dir, prefix, stage):
+    build_dir, destdir, stage = base / "obj", base / "install", base / "stage"
+    for path in (build_dir, destdir, stage):
         clean_directory(path)
+    prefix = destdir / CONFIGURE_PREFIX.lstrip("/")
 
     env = msys_environment(msvc_environment()) if plat["os"] == "windows" else dict(os.environ)
     check_nasm(plat, env, build_dir)
-    args = configure_and_make(config, name, build_dir, prefix, env)
+    args = configure_and_make(config, name, build_dir, destdir, env)
 
     components = enabled_components(build_dir)
     check_components(config, components)
@@ -504,6 +528,7 @@ def build(config: dict, name: str) -> Path:
     library, symbols = link_shared(config, plat, build_dir, prefix, sdk, env)
     exports = shared_library_exports(plat, sdk / library, env)
     check_exports(config, exports, symbols)
+    check_no_machine_paths(sdk / library)
     dependencies = shared_library_dependencies(plat, sdk / library, env)
     (sdk / "exports.txt").write_text("".join(f"{s}\n" for s in sorted(exports)),
                                      encoding="utf-8")
@@ -519,7 +544,7 @@ def build(config: dict, name: str) -> Path:
         "ffmpeg_commit": config["ffmpeg"]["commit"],
         "library_versions": library_versions(stage / "include"),
         "toolchain": toolchain_description(plat, env),
-        "configure_args": args[1:],  # drop the machine-specific --prefix
+        "configure_args": args[1:],  # drop the placeholder --prefix
         "components": components,
         "library": library,
         "import_library": f"lib/{config['library_name']}.lib" if plat["os"] == "windows" else None,
@@ -728,7 +753,7 @@ def main() -> int:
             raise BuildError(f"{args.command} requires --platform")
         if args.command == "print-config":
             print(" ".join(shlex.quote(a)
-                           for a in configure_args(config, args.platform, "<prefix>")))
+                           for a in configure_args(config, args.platform, CONFIGURE_PREFIX)))
         if args.command in ("build", "all"):
             build(config, args.platform)
         if args.command in ("package", "all"):

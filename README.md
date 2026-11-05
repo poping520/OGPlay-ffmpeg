@@ -23,7 +23,7 @@ OGPlay 只消费 prebuilt 仓库。
 | --- | --- | --- |
 | `macos-arm64` | macOS（Apple Silicon） | Xcode 或 Command Line Tools、Python 3.9+ |
 | `macos-x64` | macOS（交叉编译） | 同上，另需 `nasm` |
-| `windows-x64` | Windows | Visual Studio（C++ x64 工具）、MSYS2（`pacman -S make nasm diffutils`）、Python 3.9+ |
+| `windows-x64` | Windows | Visual Studio（C++ x64 工具）、MSYS2（`pacman -S make nasm diffutils`）、Python 3.9+；需开启开发者模式以允许创建符号链接 |
 
 macOS 上脚本一律经 `xcrun` 调用 Xcode 自带的 clang/ar/ranlib/nm/strip/otool/codesign：
 Homebrew binutils 等 GNU 工具若排在 PATH 前面，会生成 Apple ld 拒绝的静态库并损坏
@@ -77,7 +77,10 @@ MSYS2 的依赖需先在其终端中安装：`pacman -S --needed make nasm diffu
 3. 合并库的导出集合等于静态库中全部公共符号（`av_`/`avcodec_`/…前缀，排除
    `avpriv_`/`ff_` 私有符号），且包含全部 `consumer_api`。
 4. 依赖只能是系统库：macOS 仅 `libSystem`；Windows 仅系统 DLL 与 MSVC 运行时。
-5. 冒烟：运行时版本与头文件版本一致；运行时 decoder/demuxer 与配置一致；没有
+5. 合并库不含构建目录、源码目录或用户主目录路径：`--prefix` 固定为占位值 `/ogplay-ffmpeg`，
+   实际经 `DESTDIR` 安装到 `build/<平台>/install`，因为 configure 参数会被原样记录进库；
+   源码经 `src` 符号链接以相对路径编译；Windows DLL 只记录 PDB 文件名。
+6. 冒烟：运行时版本与头文件版本一致；运行时 decoder/demuxer 与配置一致；没有
    encoder/muxer/protocol；样本按 [`tests/samples/samples.json`](tests/samples/samples.json)
    判定帧数、尺寸、RGBA 转换、seek、PCM 样本数，未编入的编码必须报告 `unsupported`。
 
