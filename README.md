@@ -68,7 +68,7 @@ MSYS2 的依赖需先在其终端中安装：`pacman -S --needed make nasm diffu
 | `verify` | 校验 prebuilt 仓库全部清单、文件哈希及源码 commit 一致性 |
 
 `--prebuilt` 默认指向同级目录 `../OGPlay-ffmpeg-prebuilt`。升级 FFmpeg 源码导致公共头
-变化时，`package` 需要 `--replace-headers`，并且所有平台都要重新构建。
+变化时，`package` 需要 `--replace-headers`（同时允许更新共享许可证），并且所有平台都要重新构建。
 
 ## 构建时的机器检查
 
@@ -96,6 +96,8 @@ MSYS2 的依赖需先在其终端中安装：`pacman -S --needed make nasm diffu
 
 ## 许可证
 
-产物为 LGPL-2.1-or-later 的 FFmpeg 动态库；每个平台包携带 FFmpeg 的
-`COPYING.LGPLv2.1` 与 `LICENSE.md`，清单记录源码 tag、commit 与完整 configure 参数。
+产物为 LGPL-2.1-or-later 的 FFmpeg 动态库；prebuilt 根目录 `licenses/` 共用一份 FFmpeg 的
+`COPYING.LGPLv2.1` 与 `LICENSE.md`，统一为 LF 换行并附文件哈希清单。平台清单通过
+`shared_licenses` 引用该目录，记录源码 tag、commit 与完整 configure 参数。
+单独分发任一平台时须一并携带共享许可证目录。
 对应源码即本仓库 `ffmpeg/` submodule 固定的上游 commit 加本仓库脚本。

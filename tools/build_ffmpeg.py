@@ -564,14 +564,41 @@ def build(config: dict, name: str) -> Path:
 # Package / verify
 
 
-def headers_manifest(config: dict, include: Path) -> dict:
+def shared_manifest(config: dict, root: Path, kind: str) -> dict:
     return {
         "schema_version": SCHEMA_VERSION,
-        "kind": "headers",
+        "kind": kind,
         "ffmpeg_tag": config["ffmpeg"]["tag"],
         "ffmpeg_commit": config["ffmpeg"]["commit"],
-        "files": file_entries(include),
+        "files": file_entries(root),
     }
+
+
+def package_licenses(config: dict, staged: Path, prebuilt: Path, replace: bool) -> None:
+    licenses = prebuilt / "licenses"
+    temporary = prebuilt / ".licenses.tmp"
+    if temporary.exists():
+        shutil.rmtree(temporary)
+    temporary.mkdir()
+    try:
+        for name in ("FFmpeg-COPYING.LGPLv2.1", "FFmpeg-LICENSE.md"):
+            # Git on Windows may check out the upstream license texts with CRLF.
+            (temporary / name).write_bytes((staged / name).read_bytes().replace(b"\r\n", b"\n"))
+        manifest = shared_manifest(config, temporary, "licenses")
+        if licenses.exists():
+            current = read_json(licenses / "manifest.json")
+            verify_tree(licenses, current)
+            if current == manifest:
+                return
+            if not replace:
+                raise BuildError("staged licenses differ from prebuilt licenses/; pass "
+                                 "--replace-headers when moving to a new FFmpeg source")
+            shutil.rmtree(licenses)
+        write_json(temporary / "manifest.json", manifest)
+        temporary.rename(licenses)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
 
 
 def package(config: dict, name: str, prebuilt: Path, replace_headers: bool) -> Path:
@@ -598,15 +625,18 @@ def package(config: dict, name: str, prebuilt: Path, replace_headers: bool) -> P
             shutil.rmtree(include)
     if not include.exists():
         shutil.copytree(stage / "include", include)
-        write_json(include / "manifest.json", headers_manifest(config, include))
+        write_json(include / "manifest.json", shared_manifest(config, include, "headers"))
+
+    package_licenses(config, stage / "sdk" / "licenses", prebuilt, replace_headers)
 
     destination = prebuilt / name
     temporary = prebuilt / f".{name}.tmp"
     if temporary.exists():
         shutil.rmtree(temporary)
-    shutil.copytree(stage / "sdk", temporary)
+    shutil.copytree(stage / "sdk", temporary, ignore=shutil.ignore_patterns("licenses"))
     manifest = dict(info)
     manifest["shared_headers"] = "include"
+    manifest["shared_licenses"] = "licenses"
     manifest["files"] = file_entries(temporary)
     write_json(temporary / "manifest.json", manifest)
     if destination.exists():
@@ -635,6 +665,11 @@ def verify(config: dict, prebuilt: Path) -> None:
     include = prebuilt / "include"
     headers = read_json(include / "manifest.json")
     verify_tree(include, headers)
+    licenses = prebuilt / "licenses"
+    license_manifest = read_json(licenses / "manifest.json")
+    verify_tree(licenses, license_manifest)
+    if license_manifest["ffmpeg_commit"] != headers["ffmpeg_commit"]:
+        raise BuildError("licenses/ was built from a different commit than include/")
     platforms = []
     for name in config["platforms"]:
         root = prebuilt / name
@@ -642,6 +677,8 @@ def verify(config: dict, prebuilt: Path) -> None:
             continue
         manifest = read_json(root / "manifest.json")
         verify_tree(root, manifest)
+        if manifest.get("shared_licenses") != "licenses" or (root / "licenses").exists():
+            raise BuildError(f"{name} must use the shared licenses/ directory")
         if manifest["ffmpeg_commit"] != headers["ffmpeg_commit"]:
             raise BuildError(f"{name} was built from a different commit than include/")
         if manifest["ffmpeg_commit"] != config["ffmpeg"]["commit"]:
@@ -650,7 +687,7 @@ def verify(config: dict, prebuilt: Path) -> None:
         platforms.append(name)
     if not platforms:
         raise BuildError(f"{prebuilt} has no platform packages")
-    print(f"verified {prebuilt}: include + {', '.join(platforms)}")
+    print(f"verified {prebuilt}: include + licenses + {', '.join(platforms)}")
 
 
 # --------------------------------------------------------------------------
@@ -737,7 +774,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prebuilt", type=Path, default=DEFAULT_PREBUILT,
                         help="prebuilt repository (default: ../OGPlay-ffmpeg-prebuilt)")
     parser.add_argument("--replace-headers", action="store_true",
-                        help="allow package to replace include/ (new FFmpeg source)")
+                        help="allow package to replace include/ and licenses/ (new FFmpeg source)")
     return parser.parse_args()
 
 
