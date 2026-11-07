@@ -23,6 +23,7 @@ OGPlay 只消费 prebuilt 仓库。
 | --- | --- | --- |
 | `macos-arm64` | macOS（Apple Silicon） | Xcode 或 Command Line Tools、Python 3.9+ |
 | `macos-x64` | macOS（交叉编译） | 同上，另需 `nasm` |
+| `android-arm64` | macOS（交叉编译） | Android NDK r30（`30.0.16248370`）、GNU Make、Python 3.9+、宿主 C 编译器 |
 | `windows-x64` | Windows | Visual Studio（C++ x64 工具）、MSYS2（`pacman -S make nasm diffutils`）、Python 3.9+；需开启开发者模式以允许创建符号链接 |
 
 macOS 上脚本一律经 `xcrun` 调用 Xcode 自带的 clang/ar/ranlib/nm/strip/otool/codesign：
@@ -44,6 +45,19 @@ python3 tools/build_ffmpeg.py all --platform macos-arm64
 
 浅克隆可能只取得固定 commit，未取得对应 tag；构建前补取 `ffmpeg.json` 中的固定标签，
 确保生成的版本头与 prebuilt 公共头一致。升级源码时同步替换上述标签。
+
+Android `arm64-v8a`（API 23）使用 `ANDROID_HOME/ndk/<版本>` 下的工具链，SDK 默认位于
+`~/Library/Android/sdk`。安装清单固定的 NDK 后，在仓库根目录运行：
+
+```sh
+python3 tools/build_ffmpeg.py build --platform android-arm64
+python3 tools/build_ffmpeg.py package --platform android-arm64
+python3 tools/build_ffmpeg.py verify
+```
+
+`build` 输出 `build/android-arm64/stage/sdk/lib/libogplay_ffmpeg.so`，校验 AArch64 ELF、
+16 KiB 段对齐、SONAME、公共导出及系统库依赖。Android 样本解码需在设备上运行，当前脚本
+的 `smoke` 和 `all` 只支持桌面目标。
 
 Windows PowerShell（在本仓库根目录运行）：
 
@@ -76,7 +90,8 @@ MSYS2 的依赖需先在其终端中安装：`pacman -S --needed make nasm diffu
 2. `config_components.h` 中启用的组件与配置完全相等。
 3. 合并库的导出集合等于静态库中全部公共符号（`av_`/`avcodec_`/…前缀，排除
    `avpriv_`/`ff_` 私有符号），且包含全部 `consumer_api`。
-4. 依赖只能是系统库：macOS 仅 `libSystem`；Windows 仅系统 DLL 与 MSVC 运行时。
+4. 依赖只能是系统库：macOS 仅 `libSystem`；Windows 仅系统 DLL 与 MSVC 运行时；
+   Android 仅允许 `libc.so`、`libdl.so`、`libm.so`。
 5. 合并库不含构建目录、源码目录或用户主目录路径：`--prefix` 固定为占位值 `/ogplay-ffmpeg`，
    实际经 `DESTDIR` 安装到 `build/<平台>/install`，因为 configure 参数会被原样记录进库；
    源码经 `src` 符号链接以相对路径编译；Windows DLL 只记录 PDB 文件名。

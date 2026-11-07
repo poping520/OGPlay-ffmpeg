@@ -52,6 +52,7 @@ WINDOWS_SYSTEM_DLLS = re.compile(
     re.IGNORECASE,
 )
 MACOS_SYSTEM_DYLIBS = ("/usr/lib/libSystem.B.dylib",)
+ANDROID_SYSTEM_LIBS = ("libc.so", "libdl.so", "libm.so")
 OS_METADATA_FILES = (".DS_Store", "Thumbs.db", "desktop.ini")
 
 
@@ -84,8 +85,9 @@ def host_os() -> str:
 
 
 def require_host(plat: dict, name: str) -> None:
-    if plat["os"] != host_os():
-        raise BuildError(f"{name} must be built on a {plat['os']} host, not {host_os()}")
+    host = plat.get("host", plat["os"])
+    if host != host_os():
+        raise BuildError(f"{name} must be built on a {host} host, not {host_os()}")
 
 
 def run(cmd, *, cwd: Path | None = None, env: dict | None = None,
@@ -236,6 +238,22 @@ def macos_flags(plat: dict) -> str:
     return f"-arch {macos_arch(plat)} -mmacosx-version-min={plat['deployment_target']}"
 
 
+def android_environment(plat: dict) -> dict:
+    env = dict(os.environ)
+    sdk = Path(env.get("ANDROID_HOME") or Path.home() / "Library" / "Android" / "sdk")
+    version = plat["ndk_version"]
+    # The macOS NDK uses this directory name on both Intel and Apple Silicon.
+    tools = sdk / "ndk" / version / "toolchains" / "llvm" / "prebuilt" / "darwin-x86_64" / "bin"
+    if not (tools / android_cc(plat)).is_file():
+        raise BuildError(f"Android NDK {version} not found under {sdk}; check ANDROID_HOME")
+    env["PATH"] = f"{tools.resolve()}{os.pathsep}{env.get('PATH', os.defpath)}"
+    return env
+
+
+def android_cc(plat: dict) -> str:
+    return f"aarch64-linux-android{plat['deployment_target']}-clang"
+
+
 # --------------------------------------------------------------------------
 # Configure / build
 
@@ -256,10 +274,16 @@ def configure_args(config: dict, name: str, prefix: str) -> list[str]:
                  f"--ranlib={apple_tool('ranlib')}", f"--nm={apple_tool('nm')}",
                  f"--strip={apple_tool('strip')}",
                  f"--extra-cflags={flags}", f"--extra-ldflags={flags}"]
+    elif plat["os"] == "android":
+        # configure records its arguments in the library. Resolve tools via PATH.
+        args += [f"--cc={android_cc(plat)}", "--ar=llvm-ar", "--ranlib=llvm-ranlib",
+                 "--nm=llvm-nm", "--strip=llvm-strip"]
     return args
 
 
 def toolchain_description(plat: dict, env: dict) -> str:
+    if plat["os"] == "android":
+        return run([android_cc(plat), "--version"], env=env, capture=True).splitlines()[0].strip()
     if plat["os"] == "windows":
         search_path = next(value for key, value in reversed(list(env.items()))
                            if key.upper() == "PATH")
@@ -389,6 +413,11 @@ def exported_symbol_candidates(config: dict, plat: dict, libs: list[Path],
                 match = line_re.search(line)
                 if match and match.group(2).startswith(prefixes):
                     symbols[match.group(2)] = match.group(1) is None
+    elif plat["os"] == "android":
+        for lib in libs:
+            for symbol in android_symbols(lib, env):
+                if symbol.startswith(prefixes):
+                    symbols[symbol] = False  # Only the Windows export list needs data markers.
     else:
         line_re = re.compile(r"^[0-9a-fA-F]+\s+([TDSBC])\s+_(\w+)$")
         for lib in libs:
@@ -399,6 +428,14 @@ def exported_symbol_candidates(config: dict, plat: dict, libs: list[Path],
     if not symbols:
         raise BuildError("no public FFmpeg symbols found in static libraries")
     return dict(sorted(symbols.items()))
+
+
+def android_symbols(path: Path, env: dict, *, dynamic: bool = False) -> set[str]:
+    args = ["llvm-nm", "--format=posix", "--extern-only", "--defined-only"]
+    if dynamic:
+        args.append("--dynamic")
+    output = run([*args, path], env=env, capture=True)
+    return set(re.findall(r"^(\w+) [A-Za-z] [0-9a-fA-F]+", output, re.M))
 
 
 def link_shared(config: dict, plat: dict, build_dir: Path, prefix: Path, sdk: Path,
@@ -426,6 +463,20 @@ def link_shared(config: dict, plat: dict, build_dir: Path, prefix: Path, sdk: Pa
         return f"bin/{name}.dll", symbols
 
     (sdk / "lib").mkdir(parents=True)
+    if plat["os"] == "android":
+        filename = f"lib{name}.so"
+        library = sdk / "lib" / filename
+        export_map = build_dir / "exports.map"
+        public = "".join(f"    {symbol};\n" for symbol in symbols)
+        export_map.write_text(f"{{\n  global:\n{public}  local: *;\n}};\n", encoding="utf-8")
+        run([android_cc(plat), "-shared", "-o", library, f"-Wl,-soname,{filename}",
+             "-Wl,--no-undefined,--gc-sections,--as-needed",
+             f"-Wl,--version-script={export_map.name}",
+             "-Wl,--whole-archive", *libs, "-Wl,--no-whole-archive", *extras],
+            cwd=build_dir, env=env)
+        run(["llvm-strip", "--strip-unneeded", library], env=env)
+        return f"lib/{filename}", symbols
+
     export_list = build_dir / "exported_symbols.txt"
     export_list.write_text("".join(f"_{s}\n" for s in symbols), encoding="utf-8")
     library = sdk / "lib" / f"lib{name}.dylib"
@@ -440,6 +491,8 @@ def link_shared(config: dict, plat: dict, build_dir: Path, prefix: Path, sdk: Pa
 
 
 def shared_library_exports(plat: dict, library: Path, env: dict) -> set[str]:
+    if plat["os"] == "android":
+        return android_symbols(library, env, dynamic=True)
     if plat["os"] == "windows":
         exports = set()
         for line in run(["dumpbin", "/nologo", "/exports", library], env=env,
@@ -457,7 +510,18 @@ def shared_library_exports(plat: dict, library: Path, env: dict) -> set[str]:
 
 
 def shared_library_dependencies(plat: dict, library: Path, env: dict) -> list[str]:
-    if plat["os"] == "windows":
+    if plat["os"] == "android":
+        output = run(["llvm-readelf", "-h", "-l", "-d", "-W", library], env=env, capture=True)
+        if not re.search(r"^\s*Machine:\s+AArch64\s*$", output, re.M):
+            raise BuildError(f"{library.name} is not an AArch64 ELF")
+        loads = re.findall(r"^\s*LOAD\s+.*?\s+(0x[0-9a-fA-F]+)\s*$", output, re.M)
+        if not loads or any(int(alignment, 16) < 16384 for alignment in loads):
+            raise BuildError(f"{library.name} must have 16 KiB-aligned ELF load segments")
+        if re.findall(r"\(SONAME\).*?\[([^\]]+)\]", output) != [library.name]:
+            raise BuildError(f"{library.name} has an unexpected ELF SONAME")
+        deps = re.findall(r"\(NEEDED\).*?\[([^\]]+)\]", output)
+        unexpected = [d for d in deps if d not in ANDROID_SYSTEM_LIBS]
+    elif plat["os"] == "windows":
         output = run(["dumpbin", "/nologo", "/dependents", library], env=env, capture=True)
         deps = re.findall(r"^\s+(\S+\.dll)\s*$", output, re.M | re.I)
         unexpected = [d for d in deps if not WINDOWS_SYSTEM_DLLS.match(d)]
@@ -506,13 +570,19 @@ def build(config: dict, name: str) -> Path:
     plat = platform_config(config, name)
     require_host(plat, name)
     check_source(config)
+    if plat["os"] == "android":
+        env = android_environment(plat)
+    elif plat["os"] == "windows":
+        env = msys_environment(msvc_environment())
+    else:
+        env = dict(os.environ)
+
     base = BUILD_ROOT / name
     build_dir, destdir, stage = base / "obj", base / "install", base / "stage"
     for path in (build_dir, destdir, stage):
         clean_directory(path)
     prefix = destdir / CONFIGURE_PREFIX.lstrip("/")
 
-    env = msys_environment(msvc_environment()) if plat["os"] == "windows" else dict(os.environ)
     check_nasm(plat, env, build_dir)
     args = configure_and_make(config, name, build_dir, destdir, env)
 
@@ -788,6 +858,9 @@ def main() -> int:
             return 0
         if not args.platform:
             raise BuildError(f"{args.command} requires --platform")
+        plat = platform_config(config, args.platform)
+        if plat["os"] == "android" and args.command in ("smoke", "all"):
+            raise BuildError("Android smoke requires a device; run build, package and verify separately")
         if args.command == "print-config":
             print(" ".join(shlex.quote(a)
                            for a in configure_args(config, args.platform, CONFIGURE_PREFIX)))

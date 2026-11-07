@@ -54,6 +54,19 @@
         "--enable-x86asm"
       ]
     },
+    "android-arm64": {
+      "os": "android",
+      "host": "macos",
+      "cpu": "arm64",
+      "deployment_target": 23,
+      "ndk_version": "30.0.16248370",
+      "configure": [
+        "--arch=aarch64",
+        "--target-os=android",
+        "--enable-cross-compile",
+        "--enable-pthreads"
+      ]
+    },
     "windows-x64": {
       "os": "windows",
       "cpu": "x64",
